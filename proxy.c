@@ -18,7 +18,6 @@ typedef struct // URL 拆解器
     string port;
     string path;
 }url_t;
-
 // 极简 Cache, 一把大锁, 随机替换, 锁内发送数据(不拷贝出去再发)
 typedef struct // Cache 部分
 {
@@ -37,13 +36,11 @@ int query_cache(string url, rio_t* client_rio)
     pthread_mutex_lock(&cache_lock);
     for(int i=0;i<MAX_CACHE_NUM;i++) 
     {
-        if(cache_entries[i].valid && strcmp(cache_entries[i].url, url)==0)
-        {
-            // 放 lock 外面 writen
-            rio_writen(client_fd, cache_entries[i].data, cache_entries[i].size); 
-            pthread_mutex_unlock(&cache_lock);
-            return 1;
-        }
+        if(!cache_entries[i].valid || strcmp(cache_entries[i].url, url)!=0) continue;
+        // Optional: 放 lock 外面 writen 更快
+        rio_writen(client_fd, cache_entries[i].data, cache_entries[i].size); 
+        pthread_mutex_unlock(&cache_lock);
+        return 1;
     }
     pthread_mutex_unlock(&cache_lock);
     return 0;
@@ -74,10 +71,10 @@ int add_cache(string url, char *data, int size)
         if(cache_entries[i].valid) continue;
         char *newdata = Malloc(size);
         memcpy(newdata, data, size);
-        cache_entries[i].data = newdata;
-        cache_entries[i].size = size;
-        cache_entries[i].valid = 1;
-        strcpy(cache_entries[i].url, url);
+        cache_entries[i].data=newdata;
+        cache_entries[i].size=size;
+        cache_entries[i].valid=1;
+        strcpy(cache_entries[i].url,url);
         break;
     }
     pthread_mutex_unlock(&cache_lock);
@@ -95,11 +92,8 @@ int parse_url(string url, url_t* url_info)
     char* host_start=url+7; // FROM http://w
     char* port_start=strchr(host_start, ':'); // FROM http://www.cmu.edu:
     char* path_start=strchr(host_start, '/'); // FROM http://www.cmu.edu:8080/
-
-    // 无路径, 错误
-    if(path_start == NULL) return -1;
-    // 无端口号, 默认 80
-    if(port_start==NULL) 
+    if(path_start == NULL) return -1; // 无路径, 错误
+    if(port_start==NULL) // 无端口号, 默认 80
     {
         *path_start = '\0';
         strcpy(url_info->host, host_start);
@@ -160,14 +154,12 @@ void do_get(rio_t* client_rio, string url)
     if(query_cache(url, client_rio)) return; // 检查 Cache
     string header_info = "";
     parse_header(client_rio, header_info, url_info.host);
-
     int server_fd = open_clientfd(url_info.host, url_info.port);
     if(server_fd<0) // 创建 TCP 网络连接, 返回套接字文件描述符, 没有就是炸了
     {
         fprintf(stderr, "Connect Fucked Up, Open connect to %s:%s error\n", url_info.host, url_info.port);
         close(server_fd); return;
     }
-
     rio_t server_rio;
     rio_readinitb(&server_rio, server_fd);
     string buf; // 准备请求行和请求头
@@ -177,7 +169,6 @@ void do_get(rio_t* client_rio, string url)
         fprintf(stderr, "Send request line and header Fucked Up\n");
         close(server_fd); return;
     }
-
     //拿着 server_rio 从服务器套接字读取数据
     int response_total = 0, response_current = 0;
     char file_cache[MAX_OBJECT_SIZE]; // 临时内存缓冲
@@ -242,25 +233,21 @@ int main(int argc, char** argv)
 {
     // printf("%s", user_agent_hdr);
     Signal(SIGPIPE, SIG_IGN); //Proxylab.pdf, Page 10, Hint 4, no exit(0)
-
     int listenfd, *connfd;
     socklen_t clientlen;
     struct sockaddr_storage clientaddr;
     pthread_t tid;
-
     if(argc!=2)
     {
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
         exit(1);
     }
-
     listenfd = Open_listenfd(argv[1]);
     while(1) // 循环接收客户端请求, 为每个连接请求创建一个线程, 再在这个线程中处理这个连接请求
     {
         clientlen = sizeof(struct sockaddr_storage);
         connfd = Malloc(sizeof(int));
         *connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
-        // WARNING: Accept 包装函数在遇到错误时会调用 unix_error, 从而使用 exit(0) 退出进程
         Pthread_create(&tid, NULL, thread, connfd);
     }
     close(listenfd);
