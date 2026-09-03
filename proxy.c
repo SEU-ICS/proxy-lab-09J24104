@@ -6,6 +6,7 @@
 /* Recommended max cache and object sizes */
 #define MAX_CACHE_SIZE 1049000
 #define MAX_OBJECT_SIZE 102400
+#define MAX_CACHE_NUM 10
 
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
@@ -17,6 +18,67 @@ typedef struct // URL 拆解器
     string port;
     string path;
 }url_t;
+
+// 极简 Cache, 一把大锁, 随机替换, 锁内发送数据(不拷贝出去再发)
+typedef struct // Cache 部分
+{
+    string url;
+    char *data;
+    int size;
+    int valid;
+} cache_file_t;
+static cache_file_t cache_entries[MAX_CACHE_NUM];
+static int total_cache_size = 0;
+static pthread_mutex_t cache_lock = PTHREAD_MUTEX_INITIALIZER; // ONE ONLY LOCK
+
+int query_cache(string url, rio_t* client_rio)
+{
+    int client_fd = client_rio->rio_fd;
+    pthread_mutex_lock(&cache_lock);
+    for(int i=0;i<MAX_CACHE_NUM;i++) 
+    {
+        if(cache_entries[i].valid && strcmp(cache_entries[i].url, url)==0)
+        {
+            rio_writen(client_fd, cache_entries[i].data, cache_entries[i].size);
+            pthread_mutex_unlock(&cache_lock);
+            return 1;
+        }
+    }
+    pthread_mutex_unlock(&cache_lock);
+    return 0;
+}
+int add_cache(string url, char *data, int size)
+{
+    pthread_mutex_lock(&cache_lock);
+    for(int i=0;i<MAX_CACHE_NUM;i++)
+    {
+        if(cache_entries[i].valid && strcmp(cache_entries[i].url, url)==0)
+        {
+            pthread_mutex_unlock(&cache_lock);
+            return 0; // 已存在，视为成功
+        }
+    }
+    int count=0;
+    for(int i=0;i<MAX_CACHE_NUM;i++)
+        count+=(cache_entries[i].valid==0);
+    if(!count)
+    {
+        int index=rand()%MAX_CACHE_NUM; //随机丢 index 位
+        free(cache_entries[index].data);
+        cache_entries[index].valid=0;
+    }
+    for(int i=0;i<MAX_CACHE_NUM;i++)
+    {
+        if(cache_entries[i].valid) continue;
+        char *newdata = Malloc(size);
+        memcpy(newdata, data, size);
+        cache_entries[i].data = newdata;
+        cache_entries[i].size = size;
+        cache_entries[i].valid = 1;
+    }
+    pthread_mutex_unlock(&cache_lock);
+    return 0;
+} 
 
 int parse_url(string url, url_t* url_info)
 {
@@ -92,6 +154,7 @@ void do_get(rio_t* client_rio, string url)
         fprintf(stderr, "Parse url error\n");
         return;
     }
+    if(query_cache(url, client_rio)) return; // 检查 Cache
     string header_info = "";
     parse_header(client_rio, header_info, url_info.host);
 
@@ -123,6 +186,8 @@ void do_get(rio_t* client_rio, string url)
             fprintf(stderr, "Read server response error\n");
             close(server_fd); return;
         }
+        if (response_total + response_current < MAX_OBJECT_SIZE) // 上 Cache
+            memcpy(file_cache + response_total, buf, response_current);
         response_total += response_current;
         if(rio_writen(client_fd, buf, response_current)!=response_current)
         {
@@ -130,6 +195,8 @@ void do_get(rio_t* client_rio, string url)
             close(server_fd); return;
         }
     }
+    if(response_total<MAX_OBJECT_SIZE)
+        add_cache(url, file_cache, response_total);
     close(server_fd);
     return;
 }
@@ -153,16 +220,14 @@ void *thread(void *vargp)
     if(rio_readlineb(&client_rio, buf, MAXLINE)<=0) // 读取客户端内容到 buf
     {
         fprintf(stderr,"Reading fucked up: %s\n",strerror(errno));
-        close(client_fd);
-        return NULL;
+        close(client_fd); return NULL;
     }
     string method, url, http_version;
     //syntax belike: GET http://www.cmu.edu/hub/index.html HTTP/1.1
     if(sscanf(buf, "%s %s %s", method, url, http_version)!=3) 
     {
         fprintf(stderr,"Parsing fucked up: %s\n",strerror(errno));
-        close(client_fd);
-        return NULL;
+        close(client_fd); return NULL;
     }
     if(!strcasecmp(method,"GET")) 
         do_get(&client_rio, url); // do get 资源!
