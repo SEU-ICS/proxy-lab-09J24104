@@ -39,7 +39,8 @@ int query_cache(string url, rio_t* client_rio)
     {
         if(cache_entries[i].valid && strcmp(cache_entries[i].url, url)==0)
         {
-            rio_writen(client_fd, cache_entries[i].data, cache_entries[i].size);
+            // 放 lock 外面 writen
+            rio_writen(client_fd, cache_entries[i].data, cache_entries[i].size); 
             pthread_mutex_unlock(&cache_lock);
             return 1;
         }
@@ -75,6 +76,7 @@ int add_cache(string url, char *data, int size)
         cache_entries[i].data = newdata;
         cache_entries[i].size = size;
         cache_entries[i].valid = 1;
+        break;
     }
     pthread_mutex_unlock(&cache_lock);
     return 0;
