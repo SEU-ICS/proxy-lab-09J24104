@@ -48,6 +48,7 @@ int query_cache(string url, rio_t* client_rio)
     pthread_mutex_unlock(&cache_lock);
     return 0;
 }
+
 int add_cache(string url, char *data, int size)
 {
     pthread_mutex_lock(&cache_lock);
@@ -76,6 +77,7 @@ int add_cache(string url, char *data, int size)
         cache_entries[i].data = newdata;
         cache_entries[i].size = size;
         cache_entries[i].valid = 1;
+        strcpy(cache_entries[i].url, url);
         break;
     }
     pthread_mutex_unlock(&cache_lock);
@@ -127,13 +129,11 @@ int parse_header(rio_t* client_rio, string header_info, string host)
     {   
         rio_readlineb(client_rio, buf, MAXLINE);
         if(strcmp(buf, "\r\n") == 0) break; // 结束行
-        if (!strncasecmp(buf, "Host:", 5))
+        if(!strncasecmp(buf, "Host:", strlen("Host:")))
             has_host=1;
-        if (!strncasecmp(buf, "Connection:",strlen("Connection:")))
-            continue;
-        if (!strncasecmp(buf, "Proxy-Connection:", strlen("Proxy-Connection:")))
-            continue;
-        if (!strncasecmp(buf, "User-Agent:", strlen("User-Agent:")))
+        if(!strncasecmp(buf, "Connection:",strlen("Connection:")) ||
+            !strncasecmp(buf, "Proxy-Connection:", strlen("Proxy-Connection:")) ||
+            !strncasecmp(buf, "User-Agent:", strlen("User-Agent:")))
             continue;
         strcat(header_info, buf);
     }
@@ -189,7 +189,7 @@ void do_get(rio_t* client_rio, string url)
             fprintf(stderr, "Read server response error\n");
             close(server_fd); return;
         }
-        if (response_total + response_current < MAX_OBJECT_SIZE) // 上 Cache
+        if(response_total + response_current < MAX_OBJECT_SIZE) // 上 Cache
             memcpy(file_cache + response_total, buf, response_current);
         response_total += response_current;
         if(rio_writen(client_fd, buf, response_current)!=response_current)
@@ -198,7 +198,7 @@ void do_get(rio_t* client_rio, string url)
             close(server_fd); return;
         }
     }
-    if(response_total<MAX_OBJECT_SIZE)
+    if(response_total < MAX_OBJECT_SIZE)
         add_cache(url, file_cache, response_total);
     close(server_fd);
     return;
