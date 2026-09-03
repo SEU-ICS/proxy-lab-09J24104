@@ -113,6 +113,7 @@ int parse_url(string url, url_t* url_info)
         strcpy(url_info->port, port_start+1);
         *path_start = '/';
         strcpy(url_info->path, path_start);
+        *port_start = ':';
     }
     return 0;
 }
