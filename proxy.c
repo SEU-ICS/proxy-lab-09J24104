@@ -231,7 +231,6 @@ void *thread(void *vargp)
 
 int main(int argc, char** argv)
 {
-    // printf("%s", user_agent_hdr);
     Signal(SIGPIPE, SIG_IGN); //Proxylab.pdf, Page 10, Hint 4, no exit(0)
     int listenfd, *connfd;
     socklen_t clientlen;
